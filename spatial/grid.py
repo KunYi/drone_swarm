@@ -56,10 +56,13 @@ class SpatialGrid:
         nearby = set()
         center = self._get_grid_key(drone.x, drone.y, drone.z)
 
+        # Convert radius to grid cells and ensure it's an integer
+        grid_radius = int(np.ceil(radius / self.grid_size))
+
         # Check surrounding grid cells
-        for dx in range(-radius, radius + 1):
-            for dy in range(-radius, radius + 1):
-                for dz in range(-radius, radius + 1):
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dy in range(-grid_radius, grid_radius + 1):
+                for dz in range(-grid_radius, grid_radius + 1):
                     key = (center[0] + dx, center[1] + dy, center[2] + dz)
                     if key in self.grid:
                         nearby.update(self.grid[key])
