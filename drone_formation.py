@@ -10,11 +10,15 @@ from functools import partial
 from itertools import product
 from sklearn.cluster import KMeans
 from concurrent.futures import ThreadPoolExecutor
-from positioning import AerialBaseStation, GroundStation, UWBTimeSync, TimeSyncManager, PositioningSystem
-from formation_controller import FormationControl
+from positioning import AerialBaseStation, GroundStation, PositioningSystem
 from formation_phase import FormationPhase
 from spatial import SpatialGrid
-from core import Drone
+from core import (
+    Drone,
+    SAFE_DISTANCE,
+    SPACING_FACTOR,
+    CONVERGENCE_THRESHOLD
+)
 from formations import (
     calculate_cube_formation,
     calculate_sphere_formation,
@@ -25,7 +29,7 @@ from formations import (
 class FormationControl:
     def __init__(self, num_drones=125):  # Default to 125 drones (5x5x5)
         # Expand coordinate system
-        self.world_size = 40  # Expand world size to accommodate more drones
+        self.world_size = 50  # 增加世界大小以適應更大的陣型
         self.center_x = self.world_size / 2
         self.center_y = self.world_size / 2
 
@@ -49,7 +53,7 @@ class FormationControl:
         self.pool = Pool(processes=mp.cpu_count())
 
         # Initialize drones
-        spacing = 1.2  # Increase initial spacing
+        spacing = SAFE_DISTANCE * 1.2
         self.ground_positions = []
         rows = int(np.ceil(np.sqrt(num_drones)))
         cols = int(np.ceil(num_drones / rows))
@@ -97,9 +101,9 @@ class FormationControl:
         self.formation_duration = {
             FormationPhase.PREPARE: 3,          # 3 seconds to show initial state
             FormationPhase.STATIONS_TAKEOFF: 8,  # Time for aerial stations to take off
-            FormationPhase.GROUND: 6,           # Ground formation time
-            FormationPhase.CUBE: 14,            # Cube formation time
-            FormationPhase.SPHERE: 15,          # Sphere formation time
+            FormationPhase.GROUND: 4,           # Ground formation time
+            FormationPhase.CUBE: 15,            # Cube formation time
+            FormationPhase.SPHERE: 12,          # Sphere formation time
             FormationPhase.PYRAMID: 22,         # Pyramid formation time
             FormationPhase.DNA: 16,            # DNA formation time
             FormationPhase.LANDING: 20,         # Drones landing time
@@ -108,7 +112,7 @@ class FormationControl:
         }
 
         # Adjust convergence parameters
-        self.convergence_threshold = 0.15  # Slightly relax convergence threshold to accommodate more drones
+        self.convergence_threshold = CONVERGENCE_THRESHOLD  # 使用配置中的收斂閾值
 
         # Initialize time-related variables
         self.start_time = time.time()
@@ -159,7 +163,31 @@ class FormationControl:
                 return self.ground_positions
 
         elif formation_type == FormationPhase.LANDING:
-            return self.ground_positions
+            # 計算當前階段的進度（0-1之間）
+            phase_progress = min(1.0, (time.time() - self.phase_start_time) / self.formation_duration[FormationPhase.LANDING])
+
+            # 獲取當前所有無人機的位置
+            current_positions = [(drone.x, drone.y, drone.z) for drone in self.drones]
+
+            # 計算每個無人機的降落位置
+            landing_positions = []
+            for i, (current_pos, ground_pos) in enumerate(zip(current_positions, self.ground_positions)):
+                # 使用餘弦函數使降落更平滑
+                progress = 0.5 * (1 - np.cos(phase_progress * np.pi))
+
+                if progress < 0.7:  # 前70%的時間用於降低高度
+                    # 只降低高度，保持水平位置不變
+                    vertical_progress = progress / 0.7
+                    current_height = current_pos[2] * (1 - vertical_progress)
+                    landing_positions.append((current_pos[0], current_pos[1], current_height))
+                else:  # 後30%的時間用於水平移動
+                    # 已經降到較低高度，開始水平移動
+                    horizontal_progress = (progress - 0.7) / 0.3
+                    x = current_pos[0] + (ground_pos[0] - current_pos[0]) * horizontal_progress
+                    y = current_pos[1] + (ground_pos[1] - current_pos[1]) * horizontal_progress
+                    landing_positions.append((x, y, 0))  # 保持最低高度
+
+            return landing_positions
 
         # Ensure enough positions are returned
         if len(positions) < self.num_drones:
@@ -211,53 +239,9 @@ class FormationControl:
 
             # Handle aerial stations movement
             if self.current_phase == FormationPhase.STATIONS_TAKEOFF:
-                # Set target heights if not set
-                if not hasattr(self, 'target_heights_set'):
-                    self.target_heights = [8, 8, 8, 15, 8]  # Different heights for each station
-                    for station, height in zip(self.aerial_stations, self.target_heights):
-                        station.target_x = station.x  # Keep x,y position
-                        station.target_y = station.y
-                        station.target_z = height     # Set target height
-                    self.target_heights_set = True
-
-                # Move stations
-                for station in self.aerial_stations:
-                    dx = station.target_x - station.x
-                    dy = station.target_y - station.y
-                    dz = station.target_z - station.z
-
-                    # Calculate distance to target
-                    distance = np.sqrt(dx*dx + dy*dy + dz*dz)
-                    if distance > 0.1:
-                        # Move stations gradually to their target positions
-                        speed_factor = 0.05  # Reduced speed for smoother movement
-                        station.x += dx * speed_factor
-                        station.y += dy * speed_factor
-                        station.z += dz * speed_factor
-
+                self._handle_stations_takeoff()
             elif self.current_phase == FormationPhase.STATIONS_LANDING:
-                # Set landing targets if not set
-                if not hasattr(self, 'landing_targets_set'):
-                    for station in self.aerial_stations:
-                        station.target_x = station.x  # Keep x,y position
-                        station.target_y = station.y
-                        station.target_z = 0          # Set target height to ground
-                    self.landing_targets_set = True
-
-                # Move stations
-                for station in self.aerial_stations:
-                    dx = station.target_x - station.x
-                    dy = station.target_y - station.y
-                    dz = station.target_z - station.z
-
-                    # Calculate distance to target
-                    distance = np.sqrt(dx*dx + dy*dy + dz*dz)
-                    if distance > 0.1:
-                        # Move stations gradually to their target positions
-                        speed_factor = 0.05  # Reduced speed for smoother movement
-                        station.x += dx * speed_factor
-                        station.y += dy * speed_factor
-                        station.z += dz * speed_factor
+                self._handle_stations_landing()
 
             # Calculate target positions for drones
             target_positions = self._calculate_formation_positions(self.current_phase)
@@ -268,77 +252,122 @@ class FormationControl:
             # 使用匈牙利算法優化目標分配
             optimized_targets = self._optimize_target_assignment(current_positions, target_positions)
 
-            # Update drone positions
+            # 更新空間網格
+            self.spatial_grid.clear()
+            for drone in self.drones:
+                self.spatial_grid.update_drone_position(drone)
+
+            # 更新無人機位置
             for i, drone in enumerate(self.drones):
                 if i < len(optimized_targets):
                     drone.target_x, drone.target_y, drone.target_z = optimized_targets[i]
-                    # 使用空間網格獲取鄰近無人機
                     nearby_drones = self.spatial_grid.get_nearby_drones(drone)
                     drone.update_position(nearby_drones)
 
-            # Update the scatter plot
-            positions = []
-            colors = []
-
-            # Add ground station
-            positions.append((self.ground_station.x, self.ground_station.y, self.ground_station.z))
-            colors.append('red')  # Ground station in red
-
-            # Add aerial stations
-            for station in self.aerial_stations:
-                positions.append((station.x, station.y, station.z))
-                colors.append('green')  # Aerial stations in green
-
-            # Add drones
-            for drone in self.drones:
-                positions.append((drone.x, drone.y, drone.z))
-                colors.append('blue')  # Drones in blue
-
-            # Convert to numpy arrays for plotting
-            positions = np.array(positions)
-            x = positions[:, 0]
-            y = positions[:, 1]
-            z = positions[:, 2]
-
-            if hasattr(self, 'scatter'):
-                self.scatter.remove()
-            self.scatter = self.ax.scatter(x, y, z, c=colors, marker='o')
-
-            # Set axis limits
-            self.ax.set_xlim([0, self.world_size])
-            self.ax.set_ylim([0, self.world_size])
-
-            # Only fix Z axis during aerial station related phases
-            if self.current_phase in [FormationPhase.STATIONS_TAKEOFF, FormationPhase.STATIONS_LANDING]:
-                self.ax.set_zlim([0, self.world_size * 0.6])
-            else:
-                # Calculate dynamic Z limit based on drone positions
-                max_z = max(z) if len(z) > 0 else self.world_size * 0.6
-                self.ax.set_zlim([0, max(max_z + 2, self.world_size * 0.3)])  # Add some padding above highest point
-
-            # Update view angle
-            self.update_view()
-
-            # Check if formation change is needed
-            if self.should_change_formation(phase_elapsed_time):
-                old_phase = self.current_phase
-                self.current_formation_index = (self.current_formation_index + 1) % len(self.formation_sequence)
-                self.current_phase = self.formation_sequence[self.current_formation_index]
-                self.phase_start_time = current_time
-
-                # Reset phase-specific flags
-                if hasattr(self, 'target_heights_set'):
-                    delattr(self, 'target_heights_set')
-                if hasattr(self, 'landing_targets_set'):
-                    delattr(self, 'landing_targets_set')
-
-                print(f"\nCompleted {old_phase}, transitioning to {self.current_phase}...")
-
-            return (self.scatter,)
+            # 更新視覺化
+            return self._update_visualization(phase_elapsed_time, current_time)
 
         except Exception as e:
-            print(f"Error updating formation: {str(e)}")
-            return (self.scatter,)
+            print(f"Error in update_formation: {str(e)}")
+            return None
+
+    def _handle_stations_takeoff(self):
+        """處理基站起飛階段"""
+        if not hasattr(self, 'target_heights_set'):
+            self.target_heights = [8, 8, 8, 15, 8]  # Different heights for each station
+            for station, height in zip(self.aerial_stations, self.target_heights):
+                station.target_x = station.x
+                station.target_y = station.y
+                station.target_z = height
+            self.target_heights_set = True
+
+        self._update_station_positions()
+
+    def _handle_stations_landing(self):
+        """處理基站降落階段"""
+        if not hasattr(self, 'landing_targets_set'):
+            for station in self.aerial_stations:
+                station.target_x = station.x
+                station.target_y = station.y
+                station.target_z = 0
+            self.landing_targets_set = True
+
+        self._update_station_positions()
+
+    def _update_station_positions(self):
+        """更新基站位置"""
+        for station in self.aerial_stations:
+            dx = station.target_x - station.x
+            dy = station.target_y - station.y
+            dz = station.target_z - station.z
+
+            distance = np.sqrt(dx*dx + dy*dy + dz*dz)
+            if distance > 0.1:
+                speed_factor = 0.05
+                station.x += dx * speed_factor
+                station.y += dy * speed_factor
+                station.z += dz * speed_factor
+
+    def _update_visualization(self, phase_elapsed_time, current_time):
+        """更新視覺化效果"""
+        positions = []
+        colors = []
+
+        # 添加地面站
+        positions.append((self.ground_station.x, self.ground_station.y, self.ground_station.z))
+        colors.append('red')
+
+        # 添加空中基站
+        for station in self.aerial_stations:
+            positions.append((station.x, station.y, station.z))
+            colors.append('green')
+
+        # 添加無人機
+        for drone in self.drones:
+            positions.append((drone.x, drone.y, drone.z))
+            colors.append('blue')
+
+        # 轉換為numpy數組進行繪圖
+        positions = np.array(positions)
+        x = positions[:, 0]
+        y = positions[:, 1]
+        z = positions[:, 2]
+
+        if hasattr(self, 'scatter'):
+            self.scatter.remove()
+        self.scatter = self.ax.scatter(x, y, z, c=colors, marker='o')
+
+        # Set axis limits
+        self.ax.set_xlim([0, self.world_size])
+        self.ax.set_ylim([0, self.world_size])
+
+        # Only fix Z axis during aerial station related phases
+        if self.current_phase in [FormationPhase.STATIONS_TAKEOFF, FormationPhase.STATIONS_LANDING]:
+            self.ax.set_zlim([0, self.world_size * 0.6])
+        else:
+            # Calculate dynamic Z limit based on drone positions
+            max_z = max(z) if len(z) > 0 else self.world_size * 0.6
+            self.ax.set_zlim([0, max(max_z + 2, self.world_size * 0.3)])  # Add some padding above highest point
+
+        # Update view angle
+        self.update_view()
+
+        # Check if formation change is needed
+        if self.should_change_formation(phase_elapsed_time):
+            old_phase = self.current_phase
+            self.current_formation_index = (self.current_formation_index + 1) % len(self.formation_sequence)
+            self.current_phase = self.formation_sequence[self.current_formation_index]
+            self.phase_start_time = current_time
+
+            # Reset phase-specific flags
+            if hasattr(self, 'target_heights_set'):
+                delattr(self, 'target_heights_set')
+            if hasattr(self, 'landing_targets_set'):
+                delattr(self, 'landing_targets_set')
+
+            print(f"\nCompleted {old_phase}, transitioning to {self.current_phase}...")
+
+        return (self.scatter,)
 
     def should_change_formation(self, elapsed_time):
         """Check if formation should be changed"""

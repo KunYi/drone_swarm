@@ -12,13 +12,13 @@ def calculate_sphere_position(i, total, center_x, center_y, radius):
 
     x = center_x + np.cos(theta) * radius_at_y * radius
     y = center_y + y * radius
-    z = 3 + np.sin(theta) * radius_at_y * radius
+    z = 8 + np.sin(theta) * radius_at_y * radius
     return (x, y, z)
 
 def calculate_sphere_formation(num_drones, center_x, center_y, spacing):
     """Calculate positions for sphere formation"""
     positions = []
-    radius = spacing * 3  # Adjust radius based on spacing
+    radius = spacing * 4.5  # Adjust radius based on spacing
 
     for i in range(num_drones):
         pos = calculate_sphere_position(i, num_drones, center_x, center_y, radius)

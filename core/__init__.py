@@ -1,5 +1,31 @@
 """Core module for drone swarm system"""
 
 from .drone import Drone
+from .config import (
+    SAFE_DISTANCE,
+    SPACING_FACTOR,
+    MIN_HEIGHT,
+    LAYER_HEIGHT,
+    MAX_VELOCITY,
+    MAX_ACCELERATION,
+    MAX_ANGULAR_VELOCITY,
+    COMMUNICATION_RANGE,
+    UPDATE_RATE,
+    CONVERGENCE_THRESHOLD,
+    FORMATION_UPDATE_RATE
+)
 
-__all__ = ['Drone']
+__all__ = [
+    'Drone',
+    'SAFE_DISTANCE',
+    'SPACING_FACTOR',
+    'MIN_HEIGHT',
+    'LAYER_HEIGHT',
+    'MAX_VELOCITY',
+    'MAX_ACCELERATION',
+    'MAX_ANGULAR_VELOCITY',
+    'COMMUNICATION_RANGE',
+    'UPDATE_RATE',
+    'CONVERGENCE_THRESHOLD',
+    'FORMATION_UPDATE_RATE'
+]

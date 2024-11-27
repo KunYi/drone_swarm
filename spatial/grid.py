@@ -71,3 +71,14 @@ class SpatialGrid:
     def clear(self):
         """Clear all grid cells"""
         self.grid.clear()
+
+    def add_drone(self, drone):
+        """Add a drone to the grid system
+
+        Args:
+            drone: The drone object to add
+        """
+        key = self._get_grid_key(drone.x, drone.y, drone.z)
+        if key not in self.grid:
+            self.grid[key] = set()
+        self.grid[key].add(drone)
