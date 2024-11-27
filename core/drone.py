@@ -104,7 +104,7 @@ class Drone:
         return new_vx, new_vy, new_vz
 
     def calculate_avoidance_velocity(self, nearby_drones):
-        """Calculate collision avoidance velocity components
+        """Calculate collision avoidance velocity components with improved algorithm
 
         Args:
             nearby_drones: List of nearby drones to avoid
@@ -113,22 +113,48 @@ class Drone:
             tuple: Avoidance velocity components (vx, vy, vz)
         """
         avoid_vx, avoid_vy, avoid_vz = 0, 0, 0
+
+        if not nearby_drones:
+            return avoid_vx, avoid_vy, avoid_vz
+
+        # Calculate repulsive forces from all nearby drones
         for drone in nearby_drones:
             dx = self.x - drone.x
             dy = self.y - drone.y
             dz = self.z - drone.z
             distance = np.sqrt(dx*dx + dy*dy + dz*dz)
+
             if distance < self.safe_distance and distance > 0:
-                # Calculate avoidance velocity factor
-                avoid_factor = self.avoid_factor * (1 - distance / self.safe_distance)
-                # Calculate avoidance velocity components
-                avoid_vx += dx / distance * avoid_factor
-                avoid_vy += dy / distance * avoid_factor
-                avoid_vz += dz / distance * avoid_factor
+                # Enhanced avoidance with exponential decay
+                avoid_factor = self.avoid_factor * np.exp(-distance / self.safe_distance)
+
+                # Predict future positions based on current velocities
+                future_dx = dx + (self.velocity_x - drone.velocity_x)
+                future_dy = dy + (self.velocity_y - drone.velocity_y)
+                future_dz = dz + (self.velocity_z - drone.velocity_z)
+                future_distance = np.sqrt(future_dx*future_dx + future_dy*future_dy + future_dz*future_dz)
+
+                # Combine current and predicted positions for avoidance
+                if future_distance < distance:  # Approaching each other
+                    avoid_factor *= 1.5  # Increase avoidance strength
+
+                # Calculate weighted avoidance components
+                avoid_vx += (dx/distance * 0.7 + future_dx/future_distance * 0.3) * avoid_factor
+                avoid_vy += (dy/distance * 0.7 + future_dy/future_distance * 0.3) * avoid_factor
+                avoid_vz += (dz/distance * 0.7 + future_dz/future_distance * 0.3) * avoid_factor
+
+        # Normalize and scale avoidance velocity
+        total_magnitude = np.sqrt(avoid_vx*avoid_vx + avoid_vy*avoid_vy + avoid_vz*avoid_vz)
+        if total_magnitude > 0:
+            scale_factor = min(self.max_speed, total_magnitude) / total_magnitude
+            avoid_vx *= scale_factor
+            avoid_vy *= scale_factor
+            avoid_vz *= scale_factor
+
         return avoid_vx, avoid_vy, avoid_vz
 
     def update_position(self, nearby_drones=[]):
-        """Update drone position with collision avoidance
+        """Update drone position with enhanced movement and collision avoidance
 
         Args:
             nearby_drones: List of nearby drones to consider for collision avoidance
@@ -146,38 +172,50 @@ class Drone:
             self.velocity_x = self.velocity_y = self.velocity_z = 0
             return
 
-        # Calculate base velocity
+        # Enhanced speed control with smooth acceleration/deceleration
+        target_speed = self.speed
         if distance > self.deceleration_distance:
-            current_speed = self.speed * self.acceleration
+            # Gradual acceleration
+            target_speed = min(self.speed * self.acceleration,
+                             self.max_speed)
         else:
-            speed_factor = max(distance / self.deceleration_distance, 0.1)
-            current_speed = max(self.speed * speed_factor, self.min_speed)
+            # Smooth deceleration using sigmoid function
+            decel_factor = 1 / (1 + np.exp(-5 * (distance/self.deceleration_distance - 0.5)))
+            target_speed = max(self.min_speed,
+                             self.speed * decel_factor)
 
-        # Calculate target direction velocity components
-        new_vx = (dx / distance) * current_speed
-        new_vy = (dy / distance) * current_speed
-        new_vz = (dz / distance) * current_speed
+        # Calculate desired velocity components
+        direction_x = dx / distance
+        direction_y = dy / distance
+        direction_z = dz / distance
 
-        # Add collision avoidance velocity components
+        # Calculate target direction velocity with current speed
+        new_vx = direction_x * target_speed
+        new_vy = direction_y * target_speed
+        new_vz = direction_z * target_speed
+
+        # Add collision avoidance velocity
         avoid_vx, avoid_vy, avoid_vz = self.calculate_avoidance_velocity(nearby_drones)
         new_vx += avoid_vx
         new_vy += avoid_vy
         new_vz += avoid_vz
 
-        # Limit velocity and acceleration
+        # Apply velocity and acceleration limits
         new_vx, new_vy, new_vz = self.limit_velocity(new_vx, new_vy, new_vz)
         new_vx, new_vy, new_vz = self.limit_acceleration(new_vx, new_vy, new_vz)
 
-        # Update velocity and position
-        self.velocity_x = new_vx
-        self.velocity_y = new_vy
-        self.velocity_z = new_vz
+        # Smooth velocity transition
+        smoothing = 0.8  # Velocity smoothing factor
+        self.velocity_x = smoothing * self.velocity_x + (1 - smoothing) * new_vx
+        self.velocity_y = smoothing * self.velocity_y + (1 - smoothing) * new_vy
+        self.velocity_z = smoothing * self.velocity_z + (1 - smoothing) * new_vz
 
+        # Update position
         self.x += self.velocity_x
         self.y += self.velocity_y
         self.z += self.velocity_z
 
-        # Update ground status
+        # Update ground status with small buffer
         self.on_ground = (self.z < 0.1)
 
     def update_from_state(self, state_dict):
