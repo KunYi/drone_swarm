@@ -1,8 +1,4 @@
-"""
-Formation phase definitions for the drone swarm system.
-This module contains the FormationPhase enum used across the project.
-"""
-
+"""Formation phase definitions for the drone swarm system."""
 from enum import Enum, auto
 
 class FormationPhase(Enum):

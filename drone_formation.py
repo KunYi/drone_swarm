@@ -1,30 +1,41 @@
 #!/bin/python
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib import animation
-from scipy.optimize import linear_sum_assignment
-from multiprocessing import Pool
+"""Main module for drone swarm formation control."""
+
 import time
+import numpy as np
+from typing import List, Tuple, Optional, Dict
+import threading
+import logging
+from pathlib import Path
+from multiprocessing import Pool
 import multiprocessing as mp
 from functools import partial
 from itertools import product
 from sklearn.cluster import KMeans
 from concurrent.futures import ThreadPoolExecutor
-from positioning import AerialBaseStation, GroundStation, PositioningSystem
-from formation_phase import FormationPhase
-from spatial import SpatialGrid
-from core import (
-    Drone,
+import matplotlib.pyplot as plt
+from matplotlib import animation
+from scipy.optimize import linear_sum_assignment
+
+from core.config import (
     SAFE_DISTANCE,
     SPACING_FACTOR,
+    MIN_HEIGHT,
+    MAX_VELOCITY,
     CONVERGENCE_THRESHOLD
 )
+from core import Drone
+from positioning import AerialBaseStation, GroundStation, PositioningSystem
+from formations.phase import FormationPhase
 from formations import (
     calculate_cube_formation,
     calculate_sphere_formation,
     calculate_pyramid_formation,
     calculate_dna_formation
 )
+from safety.collision_avoidance import CollisionAvoidance
+from spatial import SpatialGrid
+from planning.path_planner import PathPlanner
 
 class FormationControl:
     def __init__(self, num_drones=125):  # Default to 125 drones (5x5x5)
@@ -121,6 +132,18 @@ class FormationControl:
 
         # Initialize spatial grid
         self.spatial_grid = SpatialGrid(self.world_size)
+
+        # Initialize helper systems
+        self.collision_avoidance = CollisionAvoidance(
+            min_distance=SAFE_DISTANCE,
+            max_speed=MAX_VELOCITY,
+            boundary_margin=2.0,
+            world_size=self.world_size
+        )
+        self.path_planner = PathPlanner(max_speed=MAX_VELOCITY)
+
+        # Initialize multiprocessing
+        self.thread_pool = ThreadPoolExecutor(max_workers=4)
 
     def _calculate_formation_positions(self, formation_type):
         """Calculate basic formation positions"""
