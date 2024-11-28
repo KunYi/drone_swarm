@@ -106,7 +106,7 @@ def main():
     parser.add_argument(
         "--num-drones", 
         type=int, 
-        default=125,
+        default=127,
         help="Number of drones to simulate (default: 125)"
     )
     parser.add_argument(
