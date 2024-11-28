@@ -65,14 +65,16 @@ class FormationControl:
                     y = self.world_size * 0.2 + j * spacing
                     self.ground_positions.append((x, y, 0))
 
-        # Create drone objects
+        # Create drone objects and store their initial positions
         self.drones = []
+        self.initial_positions = []  # Store initial positions for landing
         for i, pos in enumerate(self.ground_positions):
             drone = Drone(pos[0], pos[1], pos[2],  # Initial position
                         pos[0], pos[1], pos[2],    # Target position (initially the same as current position)
                         i,                         # ID number
                         is_aerial_station=False)   # Not an aerial station
             self.drones.append(drone)
+            self.initial_positions.append(pos)  # Store initial position
 
         # Initialize target positions to ground positions
         self.target_positions = self.ground_positions.copy()
@@ -102,9 +104,9 @@ class FormationControl:
             FormationPhase.PREPARE: 3,          # 3 seconds to show initial state
             FormationPhase.STATIONS_TAKEOFF: 8,  # Time for aerial stations to take off
             FormationPhase.GROUND: 4,           # Ground formation time
-            FormationPhase.CUBE: 15,            # Cube formation time
-            FormationPhase.SPHERE: 12,          # Sphere formation time
-            FormationPhase.PYRAMID: 22,         # Pyramid formation time
+            FormationPhase.CUBE: 15.5,            # Cube formation time
+            FormationPhase.SPHERE: 10,          # Sphere formation time
+            FormationPhase.PYRAMID: 14,         # Pyramid formation time
             FormationPhase.DNA: 16,            # DNA formation time
             FormationPhase.LANDING: 20,         # Drones landing time
             FormationPhase.STATIONS_LANDING: 12, # Aerial stations landing time
@@ -122,15 +124,25 @@ class FormationControl:
         # Initialize spatial grid
         self.spatial_grid = SpatialGrid(self.world_size)
 
+        # Cache for formation positions
+        self.formation_positions = {}
+
     def _calculate_formation_positions(self, formation_type):
         """Calculate basic formation positions"""
+        # Check if positions are already cached
+        if formation_type in self.formation_positions:
+            return self.formation_positions[formation_type]
+
         positions = []
         center_x = self.center_x
         center_y = self.center_y
 
-        if formation_type in [FormationPhase.PREPARE, FormationPhase.STATIONS_TAKEOFF, FormationPhase.STATIONS_LANDING, FormationPhase.EXIT, FormationPhase.GROUND]:
-            return self.ground_positions
-
+        if formation_type in [FormationPhase.PREPARE, FormationPhase.STATIONS_TAKEOFF,
+                            FormationPhase.STATIONS_LANDING, FormationPhase.EXIT,
+                            FormationPhase.GROUND]:
+            positions = self.ground_positions.copy()
+        elif formation_type == FormationPhase.LANDING:
+            positions = self.initial_positions.copy()  # Use initial positions for landing
         elif formation_type == FormationPhase.CUBE:
             spacing = 2.0  # Fixed spacing for cube formation
             try:
@@ -162,33 +174,6 @@ class FormationControl:
                 print(f"Error calculating DNA formation positions: {str(e)}")
                 return self.ground_positions
 
-        elif formation_type == FormationPhase.LANDING:
-            # 計算當前階段的進度（0-1之間）
-            phase_progress = min(1.0, (time.time() - self.phase_start_time) / self.formation_duration[FormationPhase.LANDING])
-
-            # 獲取當前所有無人機的位置
-            current_positions = [(drone.x, drone.y, drone.z) for drone in self.drones]
-
-            # 計算每個無人機的降落位置
-            landing_positions = []
-            for i, (current_pos, ground_pos) in enumerate(zip(current_positions, self.ground_positions)):
-                # 使用餘弦函數使降落更平滑
-                progress = 0.5 * (1 - np.cos(phase_progress * np.pi))
-
-                if progress < 0.7:  # 前70%的時間用於降低高度
-                    # 只降低高度，保持水平位置不變
-                    vertical_progress = progress / 0.7
-                    current_height = current_pos[2] * (1 - vertical_progress)
-                    landing_positions.append((current_pos[0], current_pos[1], current_height))
-                else:  # 後30%的時間用於水平移動
-                    # 已經降到較低高度，開始水平移動
-                    horizontal_progress = (progress - 0.7) / 0.3
-                    x = current_pos[0] + (ground_pos[0] - current_pos[0]) * horizontal_progress
-                    y = current_pos[1] + (ground_pos[1] - current_pos[1]) * horizontal_progress
-                    landing_positions.append((x, y, 0))  # 保持最低高度
-
-            return landing_positions
-
         # Ensure enough positions are returned
         if len(positions) < self.num_drones:
             print(f"Warning: {formation_type} formation returned {len(positions)} positions, but {self.num_drones} are needed")
@@ -196,6 +181,9 @@ class FormationControl:
             positions.extend(self.ground_positions[len(positions):self.num_drones])
         elif len(positions) > self.num_drones:
             positions = positions[:self.num_drones]
+
+        # Cache all formation positions
+        self.formation_positions[formation_type] = positions
 
         return positions
 
